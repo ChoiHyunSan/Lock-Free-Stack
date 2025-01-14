@@ -70,7 +70,7 @@ private:
 	Node*				_topNode;
 	LONGLONG			_size;
 
-	ObjectPool<Node>*	_nodePool;
+	MemoryPool<Node>*	_nodePool;
 
 private:
 	LONGLONG			_key = 0;
@@ -81,7 +81,7 @@ template<typename T>
 inline CLockFreeStack<T>::CLockFreeStack()
 	: _topNode(nullptr), _size(0)
 {
-	_nodePool = new ObjectPool<Node>(10000, true);
+	_nodePool = new MemoryPool<Node>(10000, true);
 }
 
 template<typename T>
@@ -95,8 +95,6 @@ inline bool CLockFreeStack<T>::Push(const T& data, LogInfo& info)
 {
 	// Node* newNode = new Node;
 	Node* newNode = _nodePool->Alloc();
-	if (newNode == nullptr) return false;
-
 	newNode->_data = data;
 	// info._unp = newNode;
 
@@ -125,6 +123,7 @@ inline bool CLockFreeStack<T>::Pop(out T& data, LogInfo& info)
 {
 	for (;;)
 	{
+		Node* oldTopNode = _topNode;
 		Node* oldNode = reinterpret_cast<Node*>((LONGLONG)_topNode & _addressMask);
 		if (oldNode == nullptr) return false;
 
@@ -134,7 +133,7 @@ inline bool CLockFreeStack<T>::Pop(out T& data, LogInfo& info)
 		//info._unp = oldNode;
 		//info._tnp = newTopNode;
 
-		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newTopNode, oldNode) == oldNode)
+		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newTopNode, oldTopNode) == oldTopNode)
 		{
 			// InterlockedDecrement64(&_size);
 

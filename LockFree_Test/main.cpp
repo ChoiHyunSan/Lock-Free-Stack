@@ -50,7 +50,7 @@ namespace LockFreeStackTest
 		::wcout << L"Test Start" << endl;
 
 		// 테스트에 사용할 쓰레드
-		const int testThreadCount = 2;
+		const int testThreadCount = 1;
 		HANDLE hThread[testThreadCount];
 		
 		__int64 index = 0;
@@ -81,7 +81,7 @@ namespace LockFreeStackTest
 
 namespace ObjectPoolTest
 {
-	ObjectPool<__int32>* testPool;
+	MemoryPool<__int32>* testPool;
 	__int64				 numCnt = -1;
 	int*				 Log;
 
@@ -98,12 +98,12 @@ namespace ObjectPoolTest
 				{
 					return false;
 				}
-				Log[InterlockedIncrement64(&numCnt)] = (*ptr[i]);
+				Log[InterlockedIncrement64(&numCnt) % 300000000] = (*ptr[i]);
 			}
 
 			for (int i = 0; i < callCnt; i++)
 			{
-				Log[InterlockedIncrement64(&numCnt)] = (*ptr[i] * -1);
+				Log[InterlockedIncrement64(&numCnt) % 300000000] = (*ptr[i] * -1);
 				if (testPool->Free(ptr[i]) == false)
 				{
 					return false;
@@ -118,7 +118,7 @@ namespace ObjectPoolTest
 		// TODO : Ready To Logging
 		Log = new int[300000000];
 
-		testPool = new ObjectPool<__int32>(3000, false);
+		testPool = new MemoryPool<__int32>(3000, false);
 		for (int cnt = 0; cnt < 3000; cnt++)
 		{
 			ptr[cnt] = testPool->Alloc();
@@ -161,7 +161,7 @@ namespace ObjectPoolTest
 
 int main()
 {
-	//ObjectPoolTest::Test();
+	// ObjectPoolTest::Test();
 
 	//infoArray = new LogInfo[LOG_COUNT];
 	//if (infoArray == nullptr)

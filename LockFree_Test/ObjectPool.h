@@ -6,13 +6,14 @@ using namespace std;
 // 주의 : DEBUG모드를 키게되면 x64에서만 작동된다. 
 
 // #define OBJECTPOOL_DEBUG
+#define KEY_BIT 47
 
 template<class T>
-class ObjectPool
+class MemoryPool
 {
 public:
-	ObjectPool(int iBlockNum, bool bPlacementNew = false);
-	virtual	~ObjectPool();
+	MemoryPool(int iBlockNum, bool bPlacementNew = false);
+	virtual	~MemoryPool();
 
 	//////////////////////////////////////////////////////////////////////////
 	// 블럭 하나를 할당받는다.  
@@ -20,7 +21,7 @@ public:
 	// Parameters: 없음.
 	// Return: (DATA *) 데이타 블럭 포인터.
 	//////////////////////////////////////////////////////////////////////////
-	T*	Alloc(void);
+	T* Alloc(void);
 
 	//////////////////////////////////////////////////////////////////////////
 	// 사용중이던 블럭을 해제한다.
@@ -45,10 +46,7 @@ public:
 	// Return: (int) 사용중인 블럭 개수.
 	//////////////////////////////////////////////////////////////////////////
 	int		GetUseCount(void) { return _useCount; }
-
-private:
-	// 안전장치 기능
-	
+	int		GetAllocCount(void) { return _allocCount; }
 
 private:
 	struct st_BLOCK_NODE
@@ -58,33 +56,32 @@ private:
 		{
 
 		}
-
-#ifdef OBJECTPOOL_DEBUG
-		void* front;
-#endif
-
 		T data;
 		st_BLOCK_NODE* _next;
-
-#ifdef OBJECTPOOL_DEBUG
-		void* back;
-#endif
 	};
 
 	// 스택 방식으로 반환된 (미사용) 오브젝트 블럭을 관리.
-	st_BLOCK_NODE* _pFreeNode;
+	st_BLOCK_NODE* _pFreeNode = nullptr;
 
 private:
-	int _useCount;
+	LONG _useCount = 0;
 	int _capacity;
+	LONG _allocCount = 0;
 
 	const bool _placementNew;
+
+	LONGLONG			_key = 0;
+	LONGLONG			_addressMask = 0x7FFFFFFFFFFF;
+
+	SRWLOCK lock;
 };
 
 template<class T>
-inline ObjectPool<T>::ObjectPool(int iBlockNum /* 초기 생성 개수 */, bool bPlacementNew /*꺼낼 때 생성자 호출 여부*/)
+inline MemoryPool<T>::MemoryPool(int iBlockNum /* 초기 생성 개수 */, bool bPlacementNew /*꺼낼 때 생성자 호출 여부*/)
 	: _placementNew(bPlacementNew)
 {
+	InitializeSRWLock(&lock);
+
 	// 초기 생성 오브젝트가 있을 시, 개수만큼 만든다.
 	if (iBlockNum > 0)
 	{
@@ -110,11 +107,13 @@ inline ObjectPool<T>::ObjectPool(int iBlockNum /* 초기 생성 개수 */, bool bPlace
 			newNode->_next = _pFreeNode->_next;
 			_pFreeNode->_next = newNode;
 		}
+
+		InterlockedAdd(&_allocCount, iBlockNum);
 	}
 }
 
 template<class T>
-inline ObjectPool<T>::~ObjectPool()
+inline MemoryPool<T>::~MemoryPool()
 {
 	while (_pFreeNode != nullptr)
 	{
@@ -135,83 +134,59 @@ inline ObjectPool<T>::~ObjectPool()
 }
 
 template<class T>
-inline T* ObjectPool<T>::Alloc(void)
-{	
+inline T* MemoryPool<T>::Alloc(void)
+{
 	for (;;)
 	{
-		if (_pFreeNode == nullptr)
+		st_BLOCK_NODE* oldNode = _pFreeNode;
+		st_BLOCK_NODE* oldMaskNode = reinterpret_cast<st_BLOCK_NODE*>((LONGLONG)oldNode & _addressMask);
+		if (oldMaskNode == nullptr)
 		{
 			st_BLOCK_NODE* newNode = new st_BLOCK_NODE;
-
-#ifdef OBJECTPOOL_DEBUG
-			newNode->front = newNode;
-			newNode->back = newNode;
-#endif
+			InterlockedIncrement(&_allocCount);
 			return (T*)&(newNode->data);
 		}
+		st_BLOCK_NODE* newTopNode = oldMaskNode->_next;
 
-		st_BLOCK_NODE* oldNode = _pFreeNode;
-		st_BLOCK_NODE* newTopNode = _pFreeNode->_next;
-		
-		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_pFreeNode), newTopNode, oldNode) == oldNode)
+		LONGLONG uniqueBit = (InterlockedIncrement64(&_key) << KEY_BIT);
+		st_BLOCK_NODE* newMaskTopNode = reinterpret_cast<st_BLOCK_NODE*>((LONGLONG)newTopNode | uniqueBit);
+
+		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_pFreeNode), newMaskTopNode, oldNode) == oldNode)
 		{
-#ifdef OBJECTPOOL_DEBUG
-			topNode->front = topNode;
-			topNode->back = topNode;
-#endif
+			InterlockedDecrement(&_useCount);
 			if (_placementNew)
 			{
-				st_BLOCK_NODE* placementNode = new(oldNode) st_BLOCK_NODE;
+				st_BLOCK_NODE* placementNode = new(oldMaskNode) st_BLOCK_NODE;
 				return (T*)&(placementNode->data);
 			}
-			return (T*)&(oldNode->data);
+			return (T*)&(oldMaskNode->data);
 		}
 	}
 }
 
 template<class T>
-inline bool ObjectPool<T>::Free(T* pData)
+inline bool MemoryPool<T>::Free(T* pData)
 {
-	// 오브젝트 풀의 메모리인지 체크
-#ifdef OBJECTPOOL_DEBUG
-	st_BLOCK_NODE* freeNode = (st_BLOCK_NODE*)((long long)pData - sizeof(void*));
-#endif 
-#ifndef OBJECTPOOL_DEBUG
 	st_BLOCK_NODE* freeNode = (st_BLOCK_NODE*)pData;
-#endif
 	if (_placementNew)
 	{
 		(freeNode)->~st_BLOCK_NODE();
 	}
 
-#ifdef OBJECTPOOL_DEBUG
-	if (freeNode != freeNode->front || freeNode != freeNode->back)
-	{
-		// 다른 오브젝트 풀 or 잘못된 할당 해제
-		return false;
-	}
-
-	freeNode->front = (void*)~(int)freeNode;
-	freeNode->back = (void*)~(int)freeNode;
-#endif
+	LONGLONG uniqueBit = (InterlockedIncrement64(&_key) << KEY_BIT);
+	st_BLOCK_NODE* freeMaskNode = reinterpret_cast<st_BLOCK_NODE*>((LONGLONG)freeNode | uniqueBit);
 
 	for (;;)
 	{
 		st_BLOCK_NODE* topNode = _pFreeNode;
-		freeNode->_next = topNode;
+		st_BLOCK_NODE* topMaskNode = reinterpret_cast<st_BLOCK_NODE*>((LONGLONG)topNode & _addressMask);
 
-#ifdef OBJECTPOOL_DEBUG
-		_pFreeNode = (st_BLOCK_NODE*)((long long)pData - sizeof(void*));
-		reinterpret_cast<st_BLOCK_NODE*>((long long)pData - sizeof(void*))->_next = topNode;
-#endif
-
-#ifndef OBJECTPOOL_DEBUG
-		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_pFreeNode), freeNode, topNode) == topNode)
+		freeNode->_next = topMaskNode;
+		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_pFreeNode), freeMaskNode, topNode) == topNode)
 		{
+			InterlockedIncrement(&_useCount);
 			break;
 		}
-#endif
 	}
-
 	return true;
 }
