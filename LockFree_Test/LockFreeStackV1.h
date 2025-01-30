@@ -4,6 +4,7 @@
 #include <vector>
 #include <list>
 #include <string>
+#include "CLockFreeStack.h"
 
 template<typename T>
 class CLockFreeStackV1
@@ -18,8 +19,8 @@ private:
 	};
 
 public:
-	bool Push(const T& data);
-	bool Pop(T& data);
+	bool Push(const T& data, LogInfo info);
+	bool Pop(T& data, LogInfo info);
 
 private:
 	Node*		_topNode;
@@ -27,24 +28,31 @@ private:
 };
 
 template<typename T>
-inline bool CLockFreeStackV1<T>::Push(const T& data)
+inline bool CLockFreeStackV1<T>::Push(const T& data, LogInfo info)
 {
-	Node* newNode = _nodePool->Alloc();
+	Node* newNode = new Node();
 	newNode->_data = data;
+	info._unp = newNode;
 
 	for (;;)
 	{
 		Node* topNode = _topNode;
-		newNode->_next = _topNode;
+		newNode->_next = topNode;
+
+		info._tnp = topNode;
 		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newNode, topNode) == topNode)
 		{
+			InterlockedIncrement64(&_size);
+			LONGLONG index = InterlockedIncrement64(&infoIndex);
+			infoArray[index % 10000] = info;
+			
 			return true;
 		}
 	}
 }
 
 template<typename T>
-inline bool CLockFreeStackV1<T>::Pop(T& data)
+inline bool CLockFreeStackV1<T>::Pop(T& data, LogInfo info)
 {
 	for (;;)
 	{
@@ -52,8 +60,16 @@ inline bool CLockFreeStackV1<T>::Pop(T& data)
 		if (oldNode == nullptr) return false;
 
 		Node* newTopNode = oldNode->_next;
+		
+		info._unp = oldNode;
+		info._tnp = newTopNode;
+		
 		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newTopNode, oldNode) == oldNode)
 		{
+			InterlockedDecrement64(&_size);
+			LONGLONG index = InterlockedIncrement64(&infoIndex);
+			infoArray[index % 10000] = info;
+
 			data = oldNode->_data;
 			delete(oldNode);
 			return true;

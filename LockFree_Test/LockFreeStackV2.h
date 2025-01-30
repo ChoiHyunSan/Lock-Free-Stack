@@ -9,6 +9,7 @@
 template<typename T>
 class CLockFreeStackV2
 {
+public:
 	CLockFreeStackV2();
 	~CLockFreeStackV2();
 

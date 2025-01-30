@@ -4,38 +4,39 @@
 #include "ObjectPool.h"
 #include <list>
 
+#include "LockFreeStackV1.h"
+#include "LockFreeStackV2.h"
+#include "LockFreeStackV3.h"
+
 #define LOG_COUNT 500000000
 
 using namespace std;
 
-LogInfo* infoArray = nullptr;
+LogInfo* infoArray = new LogInfo[10000];
 LONGLONG infoIndex = -1;
 
 namespace LockFreeStackTest
 {
-	CLockFreeStack<int> stack;
+	CLockFreeStackV3<int> stack;
 
 	unsigned int TestThreadFunc(void* arg)
 	{
-		LogInfo info;
-		info._ID = GetCurrentThreadId();
+		//LogInfo info;
+		//info._ID = GetCurrentThreadId();
 
 		for (;;)
 		{
-			::wcout << L"Loop" << endl;
-			int callCnt = 100;
+			int callCnt = 5;
 			int value = 10;
-
-			info._job = 1;
+			//info._job = 1;
 			for (int cnt = 0; cnt < callCnt; cnt++)
 			{
-				stack.Push(value, info);
+				stack.Push(value);
 			}
-
-			info._job = 0;
+			//info._job = 0;
 			for (int cnt = 0; cnt < callCnt; cnt++)
 			{
-				if (stack.Pop(value, info) == false)
+				if (stack.Pop(value) == false)
 				{
 					DebugBreak();
 				}
@@ -50,7 +51,7 @@ namespace LockFreeStackTest
 		::wcout << L"Test Start" << endl;
 
 		// 테스트에 사용할 쓰레드
-		const int testThreadCount = 1;
+		const int testThreadCount = 2;
 		HANDLE hThread[testThreadCount];
 		
 		__int64 index = 0;
@@ -161,13 +162,5 @@ namespace ObjectPoolTest
 
 int main()
 {
-	// ObjectPoolTest::Test();
-
-	//infoArray = new LogInfo[LOG_COUNT];
-	//if (infoArray == nullptr)
-	//{
-	//	return 0;
-	//}
-
 	LockFreeStackTest::Test();
 }

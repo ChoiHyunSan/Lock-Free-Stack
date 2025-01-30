@@ -5,25 +5,7 @@
 #include <list>
 #include <string>
 #include "ObjectPool.h"
-
-class LogInfo
-{
-public:
-	enum JOB
-	{
-		PUSH = 0,
-		POP = 1
-	};
-
-	bool			_job;
-	int				_ID;
-	void* _unp;
-	void* _tnp;
-
-	LogInfo(){}
-	LogInfo(int id, void* use, void* top, bool job)
-		: _ID(id), _unp(use), _tnp(top), _job(job){}
-};
+#include "CLockFreeStack.h"
 
 template<typename T>
 class CLockFreeStackV3
@@ -41,8 +23,8 @@ private:
 	};
 
 public:
-	bool Push(const T& data, LogInfo& info);
-	bool Pop(out T& data, LogInfo& info);
+	bool Push(const T& data);
+	bool Pop(out T& data);
 
 private:
 	Node* _topNode;
@@ -63,16 +45,19 @@ inline CLockFreeStackV3<T>::~CLockFreeStackV3()
 }
 
 template<typename T>
-inline bool CLockFreeStackV3<T>::Push(const T& data, LogInfo& info)
+inline bool CLockFreeStackV3<T>::Push(const T& data)
 {
-	Node* newNode = _nodePool->Alloc();	
+	Node* newNode = _nodePool->Alloc();
 	newNode->_data = data;
+
+	LONGLONG uniqueBit = (InterlockedIncrement64(&_key) << KEY_BIT);
+	Node* newTopNode = reinterpret_cast<Node*>((LONGLONG)newNode | uniqueBit);
 
 	for (;;)
 	{
 		Node* topNode = _topNode;
-		newNode->_next = _topNode;
-		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newNode, topNode) == topNode)
+		newNode->_next = reinterpret_cast<Node*>((LONGLONG)topNode & _addressMask);
+		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newTopNode, topNode) == topNode)
 		{
 			return true;
 		}
@@ -80,15 +65,17 @@ inline bool CLockFreeStackV3<T>::Push(const T& data, LogInfo& info)
 }
 
 template<typename T>
-inline bool CLockFreeStackV3<T>::Pop(T& data, LogInfo& info)
+inline bool CLockFreeStackV3<T>::Pop(T& data)
 {
 	for (;;)
 	{
-		Node* oldNode = _topNode;
+		Node* oldTopNode = _topNode;
+		Node* oldNode = reinterpret_cast<Node*>((LONGLONG)_topNode & _addressMask);
 		if (oldNode == nullptr) return false;
 
-		Node* newTopNode = oldNode->_next;
-		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newTopNode, oldNode) == oldNode)
+		LONGLONG uniqueBit = (InterlockedIncrement64(&_key) << KEY_BIT);
+		Node* newTopNode = reinterpret_cast<Node*>((LONGLONG)(oldNode->_next) | uniqueBit);
+		if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID*>(&_topNode), newTopNode, oldTopNode) == oldTopNode)
 		{
 			data = oldNode->_data;
 			_nodePool->Free(oldNode);
